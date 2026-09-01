@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 
 from fastapi import FastAPI, HTTPException
@@ -13,10 +14,21 @@ app = FastAPI(title="Krini PDF Service")
 logger = logging.getLogger("krinipdf")
 logging.basicConfig(level=logging.INFO)
 
-# Créé UNE SEULE FOIS au démarrage du process, pas à chaque requête.
-# Sans cela, WeasyPrint rescanne toutes les polices système (fontconfig)
-# à CHAQUE conversion, une opération coûteuse indépendante du HTML.
-FONT_CONFIG = FontConfiguration()
+# FontConfiguration n'est PAS thread-safe : le partager entre les workers
+# du thread pool de FastAPI provoque des corruptions GLib fontconfig
+# (double-linked list) et peut planter le process.
+# On utilise donc un objet PAR THREAD : chaque thread lit le paquet de
+# polices une seule fois puis le réutilise pour toutes ses conversions.
+_THREAD_LOCAL = threading.local()
+
+
+def _get_font_config() -> FontConfiguration:
+    """FontConfiguration appartenant au thread appelant (créé une seule fois)."""
+    cfg = getattr(_THREAD_LOCAL, "font_config", None)
+    if cfg is None:
+        cfg = FontConfiguration()
+        _THREAD_LOCAL.font_config = cfg
+    return cfg
 
 
 class PDFRequest(BaseModel):
@@ -32,7 +44,7 @@ def render_pdf(html_string: str) -> bytes:
     Fonction synchrone exécutée dans le thread pool de FastAPI
     (pas dans l'event loop) pour ne pas bloquer les autres requêtes."""
     html_doc = HTML(string=html_string)
-    return html_doc.write_pdf(font_config=FONT_CONFIG)
+    return html_doc.write_pdf(font_config=_get_font_config())
 
 
 # Endpoint **synchronisé** (def, pas async def) :
