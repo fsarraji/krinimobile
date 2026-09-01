@@ -6,11 +6,17 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from weasyprint import HTML
+from weasyprint.text.fonts import FontConfiguration
 
 app = FastAPI(title="Krini PDF Service")
 
 logger = logging.getLogger("krinipdf")
 logging.basicConfig(level=logging.INFO)
+
+# Créé UNE SEULE FOIS au démarrage du process, pas à chaque requête.
+# Sans cela, WeasyPrint rescanne toutes les polices système (fontconfig)
+# à CHAQUE conversion, une opération coûteuse indépendante du HTML.
+FONT_CONFIG = FontConfiguration()
 
 
 class PDFRequest(BaseModel):
@@ -26,7 +32,7 @@ def render_pdf(html_string: str) -> bytes:
     Fonction synchrone exécutée dans le thread pool de FastAPI
     (pas dans l'event loop) pour ne pas bloquer les autres requêtes."""
     html_doc = HTML(string=html_string)
-    return html_doc.write_pdf()
+    return html_doc.write_pdf(font_config=FONT_CONFIG)
 
 
 # Endpoint **synchronisé** (def, pas async def) :
